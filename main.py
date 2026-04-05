@@ -40,19 +40,36 @@ async def fetch_psx_symbol(symbol: str) -> dict:
             return default
         return m.group(1).strip()
 
-    # Price: Rs.271.47
-    price = find(r'Rs\.([\d,]+\.?\d*)')
+    # --- Price ---
+    # <div class="quote__close">Rs.485.38</div>
+    price = find(r'class="quote__close"[^>]*>Rs\.([\d,]+\.?\d*)<')
 
-    # Change and % change sit right below price in the markup
-    change  = find(r'Rs\.[\d,]+\.?\d*\s*\n\s*([-\d.]+)')
-    pct     = find(r'\(([-\d.]+%)\)')
+    # --- Change ---
+    # <div class="change__value">7.08</div>
+    change = find(r'class="change__value"[^>]*>([-\d.]+)<')
 
-    # Key stats block: "Open\n272.99"
-    open_p  = find(r'Open\s*[\n\r]+\s*([\d,]+\.?\d*)')
-    high    = find(r'High\s*[\n\r]+\s*([\d,]+\.?\d*)')
-    low     = find(r'Low\s*[\n\r]+\s*([\d,]+\.?\d*)')
-    volume  = find(r'Volume\s*[\n\r]+\s*([\d,]+)')
-    ldcp    = find(r'LDCP\s*[\n\r]+\s*([\d,]+\.?\d*)')
+    # --- Direction (to add sign to change) ---
+    direction = find(r'class="change__direction"[^>]*>.*?class="icon-(up|down)-dir"', "up")
+    if change != "N/A":
+        change = ("-" if direction == "down" else "+") + change
+
+    # --- % Change ---
+    # <div class="change__percent">  (1.48%)</div>
+    pct = find(r'class="change__percent"[^>]*>\s*\(([-\d.]+%)\)')
+
+    # --- Stats block ---
+    # Pattern: <div class="quote__stat__label">Open</div><div class="quote__stat__value">272.99</div>
+    def find_stat(label):
+        return find(
+            r'class="quote__stat__label"[^>]*>\s*' + label +
+            r'\s*</div>\s*<div class="quote__stat__value"[^>]*>([\d,]+\.?\d*)<'
+        )
+
+    open_p = find_stat("Open")
+    high   = find_stat("High")
+    low    = find_stat("Low")
+    volume = find_stat("Volume")
+    ldcp   = find_stat("LDCP")
 
     return {
         "symbol": symbol,
@@ -76,7 +93,6 @@ def root():
 
 @app.get("/debug/{symbol}")
 async def debug(symbol: str):
-    """Shows raw HTML snippet — use this to diagnose parse issues"""
     symbol = symbol.strip().upper()
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -86,9 +102,10 @@ async def debug(symbol: str):
         await client.get("https://dps.psx.com.pk/", headers=headers)
         resp = await client.get(f"https://dps.psx.com.pk/company/{symbol}", headers=headers)
     text = resp.text
-    idx = text.find("Rs.")
-    snippet = text[max(0, idx-50):idx+600] if idx != -1 else text[2000:3500]
-    return {"snippet": snippet, "http_status": resp.status_code, "length": len(text)}
+    # Show the stats block section
+    idx = text.find("quote__stat")
+    snippet = text[max(0, idx-100):idx+800] if idx != -1 else text[2000:3500]
+    return {"snippet": snippet, "http_status": resp.status_code}
 
 
 @app.get("/quote/{symbol}")
