@@ -40,29 +40,25 @@ async def fetch_psx_symbol(symbol: str) -> dict:
             return default
         return m.group(1).strip()
 
-    # --- Price ---
-    # <div class="quote__close">Rs.485.38</div>
+    # Price: <div class="quote__close">Rs.265.21</div>
     price = find(r'class="quote__close"[^>]*>Rs\.([\d,]+\.?\d*)<')
 
-    # --- Change ---
-    # <div class="change__value">7.08</div>
+    # Change value: <div class="change__value">0.65</div>
     change = find(r'class="change__value"[^>]*>([-\d.]+)<')
 
-    # --- Direction (to add sign to change) ---
-    direction = find(r'class="change__direction"[^>]*>.*?class="icon-(up|down)-dir"', "up")
+    # Direction: icon-up-dir or icon-down-dir
+    direction = find(r'class="icon-(up|down)-dir"')
     if change != "N/A":
         change = ("-" if direction == "down" else "+") + change
 
-    # --- % Change ---
-    # <div class="change__percent">  (1.48%)</div>
+    # % Change: <div class="change__percent">  (0.25%)</div>
     pct = find(r'class="change__percent"[^>]*>\s*\(([-\d.]+%)\)')
 
-    # --- Stats block ---
-    # Pattern: <div class="quote__stat__label">Open</div><div class="quote__stat__value">272.99</div>
+    # Stats: <div class="stats_label">Open</div><div class="stats_value">260.10</div>
     def find_stat(label):
         return find(
-            r'class="quote__stat__label"[^>]*>\s*' + label +
-            r'\s*</div>\s*<div class="quote__stat__value"[^>]*>([\d,]+\.?\d*)<'
+            r'class="stats_label"[^>]*>\s*' + label +
+            r'\s*</div>\s*<div class="stats_value"[^>]*>([\d,]+\.?\d*)<'
         )
 
     open_p = find_stat("Open")
@@ -102,8 +98,7 @@ async def debug(symbol: str):
         await client.get("https://dps.psx.com.pk/", headers=headers)
         resp = await client.get(f"https://dps.psx.com.pk/company/{symbol}", headers=headers)
     text = resp.text
-    # Show the stats block section
-    idx = text.find("quote__stat")
+    idx = text.find("stats_label")
     snippet = text[max(0, idx-100):idx+800] if idx != -1 else text[2000:3500]
     return {"snippet": snippet, "http_status": resp.status_code}
 
