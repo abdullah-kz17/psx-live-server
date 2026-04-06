@@ -15,6 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Global single client — reuse instead of creating per request
 _client = None
 
 async def get_client():
@@ -26,6 +27,7 @@ async def get_client():
             limits=httpx.Limits(max_connections=3, max_keepalive_connections=2),
         )
     return _client
+
 
 HEADERS = {
     "User-Agent": (
@@ -39,48 +41,10 @@ HEADERS = {
     "Referer": "https://dps.psx.com.pk/",
 }
 
+# Semaphore — max 2 PSX fetches at the same time to cap memory
 _sem = asyncio.Semaphore(2)
 
 
-# ---------------------------------------------------------------
-# KSE-100 index fetch from PSX homepage
-# ---------------------------------------------------------------
-async def fetch_kse100() -> dict:
-    time_str = datetime.now().strftime("%H:%M:%S")
-    try:
-        client = await get_client()
-        resp = await client.get("https://dps.psx.com.pk/", headers=HEADERS)
-        html = resp.text
-
-        def find(pattern, default="N/A"):
-            m = re.search(pattern, html, re.DOTALL)
-            return m.group(1).strip() if m else default
-
-        # KSE100 block in HTML:
-        # KSE100\n150,398.71\n0.00\n(0.00%)
-        value  = find(r'KSE100\s*\n\s*([\d,]+\.?\d*)')
-        change = find(r'KSE100\s*\n\s*[\d,]+\.?\d*\s*\n\s*([-\d.]+)')
-        pct    = find(r'KSE100\s*\n\s*[\d,]+\.?\d*\s*\n\s*[-\d.]+\s*\n\s*\(([-\d.]+%)\)')
-
-        del html
-        gc.collect()
-
-        return {
-            "index":  "KSE100",
-            "value":  value,
-            "change": change,
-            "pct":    pct,
-            "time":   time_str,
-            "status": "ok" if value != "N/A" else "parse_error",
-        }
-    except Exception as e:
-        return {"index": "KSE100", "status": "error",
-                "error": str(e), "time": time_str}
-
-
-# ---------------------------------------------------------------
-# Single stock fetch
-# ---------------------------------------------------------------
 async def fetch_psx_symbol(symbol: str) -> dict:
     symbol = symbol.strip().upper()
     time_str = datetime.now().strftime("%H:%M:%S")
@@ -97,6 +61,7 @@ async def fetch_psx_symbol(symbol: str) -> dict:
             return {"symbol": symbol, "status": "error",
                     "error": str(e), "time": time_str}
 
+    # Parse immediately, then let html be garbage collected
     def find(pattern, default="N/A"):
         m = re.search(pattern, html, re.DOTALL)
         return m.group(1).strip() if m else default
@@ -118,6 +83,7 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     volume = find_stat("Volume")
     ldcp   = find_stat("LDCP")
 
+    # Explicitly delete html string to free memory now
     del html
     gc.collect()
 
@@ -139,18 +105,9 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     }
 
 
-# ---------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------
 @app.get("/")
 def root():
     return {"message": "PSX Live Data Server is running"}
-
-
-@app.get("/kse100")
-async def kse100():
-    """Returns KSE-100 index value, change and % change"""
-    return await fetch_kse100()
 
 
 @app.get("/quote/{symbol}")
@@ -165,6 +122,8 @@ async def get_quote(symbol: str):
 @app.get("/quotes")
 async def get_quotes(symbols: str):
     sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+
+    # Process in batches of 3 to keep memory low
     output = []
     for i in range(0, len(sym_list), 3):
         batch = sym_list[i:i+3]
@@ -179,8 +138,10 @@ async def get_quotes(symbols: str):
                                "time": datetime.now().strftime("%H:%M:%S")})
             else:
                 output.append(r)
+        # Small pause between batches to avoid memory spike
         if i + 3 < len(sym_list):
             await asyncio.sleep(0.5)
+
     gc.collect()
     return {"data": output, "count": len(output)}
 
@@ -191,7 +152,9 @@ async def debug(symbol: str):
     try:
         client = await get_client()
         resp = await client.get(
-            f"https://dps.psx.com.pk/company/{symbol}", headers=HEADERS)
+            f"https://dps.psx.com.pk/company/{symbol}",
+            headers=HEADERS
+        )
         text = resp.text
         idx = text.find("stats_label")
         snippet = text[max(0, idx-100):idx+600] if idx != -1 else text[2000:3000]
