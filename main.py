@@ -93,42 +93,80 @@ async def fetch_psx_symbol(symbol: str) -> dict:
         m = re.search(pattern, html, re.DOTALL)
         return m.group(1).strip() if m else default
 
-    # --- Price ---
-    price = find(r'class="quote__close"[^>]*>Rs\.([\d,]+\.?\d*)<')
+    def clean_num(val):
+        """Removes commas and extra spaces from numeric strings."""
+        if val == "N/A": return val
+        return val.replace(",", "").strip()
 
-    # --- Extract the quote__change block first, then parse direction inside it ---
-    # This avoids picking up direction icons from KSE index tickers at page top
-    quote_change_block = find(r'class="quote__change[^"]*"[^>]*>(.*?)</div>\s*</div>\s*</div>')
-
-    direction = "up"  # default
-    if quote_change_block != "N/A":
-        if 'icon-down-dir' in quote_change_block:
-            direction = "down"
-        elif 'icon-up-dir' in quote_change_block:
-            direction = "up"
-
-    # --- Change value ---
-    change = find(r'class="change__value"[^>]*>([\d.]+)<')
-    if change != "N/A":
-        change = ("-" if direction == "down" else "+") + change
-
-    # --- % Change ---
-    pct = find(r'class="change__percent"[^>]*>\s*\(([\d.]+%)\)')
-    if pct != "N/A":
-        pct = ("-" if direction == "down" else "+") + pct
-
-    # --- Stats ---
+    # --- Raw Scraped Data ---
+    price_raw  = find(r'class="quote__close"[^>]*>Rs\.([\d,]+\.?\d*)<')
+    change_raw = find(r'class="change__value"[^>]*>([\d.]+)<')
+    pct_raw    = find(r'class="change__percent"[^>]*>\s*\(([\d.]+%)\)')
+    
     def find_stat(label):
         return find(
             r'class="stats_label"[^>]*>\s*' + label +
             r'\s*</div>\s*<div class="stats_value"[^>]*>([\d,]+\.?\d*)<'
         )
 
-    open_p = find_stat("Open")
-    high   = find_stat("High")
-    low    = find_stat("Low")
-    volume = find_stat("Volume")
-    ldcp   = find_stat("LDCP")
+    open_p_raw = find_stat("Open")
+    high_raw   = find_stat("High")
+    low_raw    = find_stat("Low")
+    vol_raw    = find_stat("Volume")
+    ldcp_raw   = find_stat("LDCP")
+
+    # --- Clean Data & Type Conversion ---
+    def to_num(val, type_func=float):
+        cleaned = clean_num(val)
+        if cleaned == "N/A": return "N/A"
+        try:
+            return type_func(cleaned)
+        except:
+            return cleaned # Fallback to cleaned string if float conversion fails
+
+    price  = to_num(price_raw)
+    change_val = to_num(change_raw)
+    pct_val    = to_num(pct_raw.replace("%", "")) # Remove % for numeric conversion
+    open_p = to_num(open_p_raw)
+    high   = to_num(high_raw)
+    low    = to_num(low_raw)
+    volume = to_num(vol_raw, int) # Volume is usually an integer
+    ldcp   = to_num(ldcp_raw)
+
+    # --- Robust Direction Calculation ---
+    direction = "even"
+    if isinstance(price, (int, float)) and isinstance(ldcp, (int, float)):
+        if price > ldcp:
+            direction = "up"
+        elif price < ldcp:
+            direction = "down"
+
+    # --- Apply Signs and Formatting for Strings (if needed) ---
+    # We'll return numeric values for price, volume, etc., 
+    # but change and pct might be better as signed strings for the dashboard display.
+    # Actually, let's keep them as numeric types so Google Sheets can handle the sorting.
+    # The prefix can be added in Sheets via custom formatting, but for simplicity
+    # we can send them as signed numbers.
+    
+    change_signed = change_val
+    if isinstance(change_val, (int, float)):
+        if direction == "down":
+            change_signed = -abs(change_val)
+        else:
+            change_signed = abs(change_val)
+            
+    pct_signed = pct_val
+    if isinstance(pct_val, (int, float)):
+        if direction == "down":
+            pct_signed = -abs(pct_val)
+        else:
+            pct_signed = abs(pct_val)
+        # Add back the % sign if returning as string, but let's return it as number/100 or just the percent number.
+        # Given the user's dashboard example, they likely want the string "+9.13%".
+        # But if we want sorting, we need numbers.
+        # Let's return both or just clean strings that Sheets can parse as numbers.
+        # Actually, if I return `-12.27` as a number, Sheets is happy.
+        pass
 
     del html
     gc.collect()
@@ -136,8 +174,8 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     return {
         "symbol": symbol,
         "price":  price,
-        "change": change,
-        "pct":    pct,
+        "change": change_signed,
+        "pct":    pct_signed,
         "volume": volume,
         "open":   open_p,
         "high":   high,
