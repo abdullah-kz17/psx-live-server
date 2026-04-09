@@ -15,37 +15,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import random
+
 _client = None
+
+# A list of realistic User-Agents to rotate
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Mozilla/5.0 (AppleWebKit/537.36; Chrome/123.0.0.0; Mobile) Safari/537.36"
+]
 
 async def get_client():
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
-            timeout=httpx.Timeout(30.0, connect=10.0),
+            timeout=httpx.Timeout(30.0, connect=15.0),
             follow_redirects=True,
-            # Limits: Reduced keep-alive to avoid stale connections
-            # which often cause 'Server disconnected' errors.
-            limits=httpx.Limits(max_connections=5, max_keepalive_connections=1),
+            http2=True, # Use HTTP/2 for better stealth
+            # Limits: Disable keep-alive to avoid connection-based bot detection
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=0),
         )
     return _client
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/123.0.0.0 Safari/537.36"
-    ),
-    "Accept": "text/html,application/xhtml+xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Referer": "https://dps.psx.com.pk/",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-}
+def get_headers():
+    ua = random.choice(USER_AGENTS)
+    return {
+        "User-Agent": ua,
+        "Accept": "text/html,application/xhtml+xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "close", # Explicitly request connection closure
+        "Referer": "https://dps.psx.com.pk/",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+        "Upgrade-Insecure-Requests": "1"
+    }
 
 _sem = asyncio.Semaphore(2)
 
@@ -54,7 +63,7 @@ async def fetch_kse100() -> dict:
     time_str = datetime.now().strftime("%H:%M:%S")
     try:
         client = await get_client()
-        resp = await client.get("https://dps.psx.com.pk/", headers=HEADERS)
+        resp = await client.get("https://dps.psx.com.pk/", headers=get_headers())
         html = resp.text
 
         def find(pattern, default="N/A"):
@@ -90,20 +99,26 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     
     # Retry loop: Try up to 3 times to mitigate intermittent disconnects
     for attempt in range(3):
+        # Add small random jitter (0.3s to 0.8s) to break request patterns
+        await asyncio.sleep(random.uniform(0.3, 0.8))
+        
         async with _sem:
             try:
                 client = await get_client()
                 resp = await client.get(
                     f"https://dps.psx.com.pk/company/{symbol}",
-                    headers=HEADERS
+                    headers=get_headers()
                 )
                 html = resp.text
-                if html:
+                # Simple validation that we got a real page
+                if html and ("quote__close" in html or "stats_label" in html):
                     break # Success
+                elif attempt < 2:
+                    await asyncio.sleep(2 * (attempt + 1))
             except Exception as e:
                 last_err = str(e)
-                # If disconnected, wait a bit and try again
-                await asyncio.sleep(1 * (attempt + 1))
+                # If disconnected, wait longer and try again
+                await asyncio.sleep(2 * (attempt + 1))
                 
     if not html:
         return {"symbol": symbol, "status": "error",
