@@ -21,9 +21,11 @@ async def get_client():
     global _client
     if _client is None or _client.is_closed:
         _client = httpx.AsyncClient(
-            timeout=20,
+            timeout=httpx.Timeout(30.0, connect=10.0),
             follow_redirects=True,
-            limits=httpx.Limits(max_connections=3, max_keepalive_connections=2),
+            # Limits: Reduced keep-alive to avoid stale connections
+            # which often cause 'Server disconnected' errors.
+            limits=httpx.Limits(max_connections=5, max_keepalive_connections=1),
         )
     return _client
 
@@ -31,12 +33,18 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36"
+        "Chrome/123.0.0.0 Safari/537.36"
     ),
-    "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.8",
+    "Accept": "text/html,application/xhtml+xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
     "Referer": "https://dps.psx.com.pk/",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-User": "?1",
 }
 
 _sem = asyncio.Semaphore(2)
@@ -77,17 +85,29 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     symbol = symbol.strip().upper()
     time_str = datetime.now().strftime("%H:%M:%S")
 
-    async with _sem:
-        try:
-            client = await get_client()
-            resp = await client.get(
-                f"https://dps.psx.com.pk/company/{symbol}",
-                headers=HEADERS
-            )
-            html = resp.text
-        except Exception as e:
-            return {"symbol": symbol, "status": "error",
-                    "error": str(e), "time": time_str}
+    html = None
+    last_err = None
+    
+    # Retry loop: Try up to 3 times to mitigate intermittent disconnects
+    for attempt in range(3):
+        async with _sem:
+            try:
+                client = await get_client()
+                resp = await client.get(
+                    f"https://dps.psx.com.pk/company/{symbol}",
+                    headers=HEADERS
+                )
+                html = resp.text
+                if html:
+                    break # Success
+            except Exception as e:
+                last_err = str(e)
+                # If disconnected, wait a bit and try again
+                await asyncio.sleep(1 * (attempt + 1))
+                
+    if not html:
+        return {"symbol": symbol, "status": "error",
+                "error": last_err or "Max retries reached", "time": time_str}
 
     def find(pattern, default="N/A"):
         m = re.search(pattern, html, re.DOTALL)
