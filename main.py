@@ -100,8 +100,8 @@ async def fetch_psx_symbol(symbol: str) -> dict:
 
     # --- Raw Scraped Data ---
     price_raw  = find(r'class="quote__close"[^>]*>Rs\.([\d,]+\.?\d*)<')
-    change_raw = find(r'class="change__value"[^>]*>([\d.]+)<')
-    pct_raw    = find(r'class="change__percent"[^>]*>\s*\(([\d.]+%)\)')
+    change_raw = find(r'class="change__value"[^>]*>([-\d.]+)<')
+    pct_raw    = find(r'class="change__percent"[^>]*>\s*\(([-\d.]+%)\)')
     
     def find_stat(label):
         return find(
