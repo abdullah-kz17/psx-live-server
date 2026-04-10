@@ -221,7 +221,7 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     }
 
 
-@app.get("/")
+@app.get("/", methods=["GET", "HEAD"])
 def root():
     return {"message": "PSX Live Data Server is running"}
 
@@ -267,9 +267,8 @@ async def get_quotes(symbols: str):
 async def debug(symbol: str):
     symbol = symbol.strip().upper()
     try:
-        client = await get_client()
         resp = await client.get(
-            f"https://dps.psx.com.pk/company/{symbol}", headers=HEADERS)
+            f"https://dps.psx.com.pk/company/{symbol}", headers=get_headers())
         text = resp.text
         idx = text.find("quote__change")
         snippet = text[max(0, idx-50):idx+400] if idx != -1 else text[2000:3000]
