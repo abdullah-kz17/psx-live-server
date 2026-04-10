@@ -221,7 +221,7 @@ async def fetch_psx_symbol(symbol: str) -> dict:
     }
 
 
-@app.get("/", methods=["GET", "HEAD"])
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"message": "PSX Live Data Server is running"}
 
