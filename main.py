@@ -4,6 +4,7 @@ import httpx
 import re
 import asyncio
 import gc
+import pytz
 from datetime import datetime
 
 app = FastAPI(title="PSX Live Data Server")
@@ -59,8 +60,14 @@ def get_headers():
 _sem = asyncio.Semaphore(2)
 
 
+def get_pk_time():
+    """Returns formatted Pakistan time (GMT+5)."""
+    pk_tz = pytz.timezone("Asia/Karachi")
+    return datetime.now(pk_tz).strftime("%H:%M:%S")
+
+
 async def fetch_kse100() -> dict:
-    time_str = datetime.now().strftime("%H:%M:%S")
+    time_str = get_pk_time()
     try:
         client = await get_client()
         resp = await client.get("https://dps.psx.com.pk/", headers=get_headers())
@@ -92,7 +99,7 @@ async def fetch_kse100() -> dict:
 
 async def fetch_psx_symbol(symbol: str) -> dict:
     symbol = symbol.strip().upper()
-    time_str = datetime.now().strftime("%H:%M:%S")
+    time_str = get_pk_time()
 
     html = None
     last_err = None
@@ -254,7 +261,7 @@ async def get_quotes(symbols: str):
             if isinstance(r, Exception):
                 output.append({"symbol": sym, "status": "error",
                                "error": str(r),
-                               "time": datetime.now().strftime("%H:%M:%S")})
+                               "time": get_pk_time()})
             else:
                 output.append(r)
         if i + 3 < len(sym_list):
